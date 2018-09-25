@@ -6,13 +6,23 @@ output: html_notebook
 ```{r}
 library(tidyverse)
 library(tidyMB)
+library(broom)
 ```
 
+## Run on home computer
 ```{r}
 counts <- read_tsv("~/SGMB/PVTEST/dna_test_16s_counts.tsv")
 meta <- read_tsv("~/SGMB/PVTEST/pv_test.map")
 tax <- read_rds("~/RMB/Reference/gg_otus_tax.rds")
 ```
+
+## Run on work computer
+```{r}
+counts <- read_tsv("~/SMB/dna_test/ninja_align/dna_test_16s_counts.tsv")
+meta <- read_tsv("~/SMB/dna_test/PV_Test/pv_test.map")
+tax <- read_rds("~/Reference/gg_otus_tax.rds")
+```
+
 
 ```{r}
 p_data <- counts %>% 
@@ -28,19 +38,113 @@ p_data <- counts %>%
   mutate(RA = value / Depth, prevalence = sum(value > 0) / n())
 ```
 
+
 ```{r}
 PVpc <- tidy_pcoa(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
                     filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
-                    filter(Prep == "Homemade") %>% 
+                    mutate(Depth = as.character(Depth)) %>% 
+                    #filter(Prep == "Homemade") %>% 
                     select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA")
-```
-```{r}
+
 PVpc$axes %>% 
-  ggplot(aes(MDS1, MDS2, color = Site, shape = Compartment)) +
-  geom_point()
+  ggplot(aes(MDS1, MDS2, color = Site)) +
+  geom_point(size = 5)
 ```
+There is an ugly group of samples in the lower right hand corner. What are those and why are they so distinct?
+
+
+```{r}
+p_data %>% 
+  group_by(Phylum2) %>%
+  filter(Site != "x") %>% 
+  nest() %>% 
+  mutate(phy_sum = map_dbl(data, ~sum(.x$RA))) %>% 
+  arrange(-phy_sum) %>% 
+  head(10) %>% 
+  unnest() %>% 
+  group_by(SampleID, Phylum2, Compartment, Prep, Site, Rep) %>% 
+  summarise(total = sum(RA)) %>% 
+  group_by(SampleID, Prep, Site, Compartment) %>%
+  ggplot(aes(Rep, total, fill = Phylum2)) +
+  geom_bar(stat = "identity", width = 1) +
+  facet_grid(Site ~Compartment + Prep, space = "free", scales = "free") +
+  scale_fill_brewer(palette = "Spectral")
+```
+
+Four of the off-looking samples are in the Temple Homemade Extractions and also in the BFL MoBio samples. The off samples in the Temple rhizosphere and root are paired (i.e. the rhizosphere and endosphere orignated from the same sample). The same goes for the BFL Mobio off-samples. This leads me to believe that these roots were probably dead when I collected them. This was my first time collecting switchgrass roots and I found it particularly difficult to find live roots and was having trouble telling the difference.
+
+With this in mind, I'm going to go ahead and remove these samples from the analysis.
+
+```{r}
+deadSamples <- PVpc$axes %>% 
+  mutate(type = ifelse(MDS1 > 0.5 & MDS2 < 0, "Bad", "Good")) %>% 
+  filter(type == "Bad")
+
+PVpc_good <- tidy_pcoa(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
+                    filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
+                    mutate(Depth = as.character(Depth)) %>% 
+                    anti_join(deadSamples, by = "SampleID") %>% 
+                    select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA")
+
+PVpc_good$axes %>% 
+  ggplot(aes(MDS1, MDS2, color = Site)) +
+  geom_point(size = 5) +
+  scale_color_manual(values = c("grey50", "gold", "steelblue")) +
+  theme_bw()
+PVpc_good$axes %>% 
+  ggplot(aes(MDS1, MDS2, color = Compartment)) +
+  geom_point(size = 5) +
+  scale_color_manual(values = c("#4A6FE3", "#D33F6A")) +
+  theme_bw()
+PVpc_good$axes %>% 
+  ggplot(aes(MDS1, MDS2, color = Prep)) +
+  geom_point(size = 5) +
+  scale_color_manual(values = c("#0071B5", "#9E5C00")) +
+  theme_bw()
+```
+
+There are a few things to mention from the above PCoAs. The one that stands out the most to me is the Pickle MoBio samples are crazy different than the Pickle Homemade DNA extraction samples. This goes for both the rhizosphere and root. The other thing to note is that the the differences between the rhizosphere and root samples appear to be  larger for the MoBio samples than the Homemade DNA extraction samples.
+
+
 
 ```{r}
 p_data %>% filter(Compartment == "Iso") %>% group_by(Family, SampleID) %>% summarize(tot = sum(RA) * 100) %>%  filter(tot > 0)%>% arrange(-tot) %>% spread(key = SampleID, value = tot)
+```
+
+```{r}
+p_data %>% 
+  group_by(Phylum2) %>%
+  filter(Site != "x") %>% 
+  nest() %>% 
+  mutate(phy_sum = map_dbl(data, ~sum(.x$RA))) %>% 
+  arrange(-phy_sum) %>% 
+  head(10) %>% 
+  unnest() %>% 
+  group_by(SampleID, Phylum2, Compartment, Prep, Site, Rep) %>% 
+  summarise(total = sum(RA)) %>% 
+  group_by(SampleID, Prep, Site, Compartment) %>%
+  ggplot(aes(Rep, total, fill = Phylum2)) +
+  geom_bar(stat = "identity", width = 1) +
+  facet_grid(Site ~Compartment + Prep, space = "free", scales = "free") +
+  scale_fill_brewer(palette = "Spectral")
+```
+
+```{r}
+p_data %>% 
+  group_by(Phylum2) %>%
+  filter(Site != "x") %>% 
+  group_by(SampleID, Phylum2, Compartment, Prep, Site) %>% 
+  summarise(total = sum(RA * 1000)) %>% 
+  group_by(Prep, Site, Phylum2) %>%
+  nest() %>% 
+  mutate(models = map(data, ~lm(log2(total + 1) ~ Compartment, .))) %>% 
+  unnest(map(models, ~tidy(.))) %>% 
+  filter(term != "(Intercept)") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH")) %>% 
+  filter(p.adj <= 0.05) %>% 
+  ggplot(aes(Phylum2, estimate, fill = -log(p.value))) +
+  geom_bar(stat = "identity") +
+  facet_grid(Site ~ Prep, scales = "free") +
+  coord_flip()
 ```
 
