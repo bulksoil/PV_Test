@@ -1,0 +1,46 @@
+---
+title: "Panicum virgatum DNA Extraction Test"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(tidyMB)
+```
+
+```{r}
+counts <- read_tsv("~/SGMB/PVTEST/dna_test_16s_counts.tsv")
+meta <- read_tsv("~/SGMB/PVTEST/pv_test.map")
+tax <- read_rds("~/RMB/Reference/gg_otus_tax.rds")
+```
+
+```{r}
+p_data <- counts %>% 
+  gather(PrimerCombo, value, -OTUID) %>% 
+  rename(variable = "OTUID") %>% 
+  mutate(variable = as.character(variable)) %>% 
+  inner_join(meta, by = "PrimerCombo") %>% 
+  inner_join(tax, by = "variable") %>% 
+  filter(Family != "Mitochondria" & Class != "Chloroplast") %>% 
+  group_by(SampleID) %>% 
+  mutate(Depth = sum(value)) %>% 
+  group_by(variable) %>% 
+  mutate(RA = value / Depth, prevalence = sum(value > 0) / n())
+```
+
+```{r}
+PVpc <- tidy_pcoa(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
+                    filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
+                    filter(Prep == "Homemade") %>% 
+                    select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA")
+```
+```{r}
+PVpc$axes %>% 
+  ggplot(aes(MDS1, MDS2, color = Site, shape = Compartment)) +
+  geom_point()
+```
+
+```{r}
+p_data %>% filter(Compartment == "Iso") %>% group_by(Family, SampleID) %>% summarize(tot = sum(RA) * 100) %>%  filter(tot > 0)%>% arrange(-tot) %>% spread(key = SampleID, value = tot)
+```
+
