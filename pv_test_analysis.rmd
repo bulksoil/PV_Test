@@ -7,6 +7,7 @@ output: html_notebook
 library(tidyverse)
 library(tidyMB)
 library(broom)
+library(DESeq2)
 ```
 
 ## Run on home computer
@@ -106,31 +107,10 @@ PVpc_good$axes %>%
 There are a few things to mention from the above PCoAs. The one that stands out the most to me is the Pickle MoBio samples are crazy different than the Pickle Homemade DNA extraction samples. This goes for both the rhizosphere and root. The other thing to note is that the the differences between the rhizosphere and root samples appear to be  larger for the MoBio samples than the Homemade DNA extraction samples.
 
 
-
-```{r}
-p_data %>% filter(Compartment == "Iso") %>% group_by(Family, SampleID) %>% summarize(tot = sum(RA) * 100) %>%  filter(tot > 0)%>% arrange(-tot) %>% spread(key = SampleID, value = tot)
-```
-
+The next I did was to run a linear model to find phyla that are differentially abundant between the root and rhizosphere compartments in the Homemade and MoBio extractions. 
 ```{r}
 p_data %>% 
-  group_by(Phylum2) %>%
-  filter(Site != "x") %>% 
-  nest() %>% 
-  mutate(phy_sum = map_dbl(data, ~sum(.x$RA))) %>% 
-  arrange(-phy_sum) %>% 
-  head(10) %>% 
-  unnest() %>% 
-  group_by(SampleID, Phylum2, Compartment, Prep, Site, Rep) %>% 
-  summarise(total = sum(RA)) %>% 
-  group_by(SampleID, Prep, Site, Compartment) %>%
-  ggplot(aes(Rep, total, fill = Phylum2)) +
-  geom_bar(stat = "identity", width = 1) +
-  facet_grid(Site ~Compartment + Prep, space = "free", scales = "free") +
-  scale_fill_brewer(palette = "Spectral")
-```
-
-```{r}
-p_data %>% 
+  anti_join(deadSamples, by = "SampleID") %>% 
   group_by(Phylum2) %>%
   filter(Site != "x") %>% 
   group_by(SampleID, Phylum2, Compartment, Prep, Site) %>% 
@@ -142,9 +122,36 @@ p_data %>%
   filter(term != "(Intercept)") %>% 
   mutate(p.adj = p.adjust(p.value, "BH")) %>% 
   filter(p.adj <= 0.05) %>% 
-  ggplot(aes(Phylum2, estimate, fill = -log(p.value))) +
+  ggplot(aes(Phylum2, estimate)) +
   geom_bar(stat = "identity") +
-  facet_grid(Site ~ Prep, scales = "free") +
-  coord_flip()
+  facet_grid(Site ~ Prep, scales = "free_y") +
+  coord_flip() +
+  theme_minimal()
+```
+
+```{r}
+PV_DE <- p_data %>%
+  select(-Kingdom, -Phylum, -Phylum2, -Class, -Order, -Family, -Genus, -Species) %>% 
+  anti_join(deadSamples, by = "SampleID") %>% 
+  filter(Site != "BFL") %>% 
+  filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
+  group_by(variable) %>% 
+  filter(sum(value > 0) / n() >= 0.1) %>% 
+  mutate(group = factor(paste(Compartment))) %>% 
+  group_by(comparison = paste(Site, Prep, sep = "_")) %>% 
+  nest() %>% 
+  #mutate(dfs = map(data, ~widen(., samples = "SampleID", value = "value"))) %>% 
+  #mutate(meta = map(data, ~grab_metadata(., samples = "SampleID")))
+  mutate(DGEL = map(data, ~suppressMessages(tidyDGEL(., method = "DESeq2", value = "value", group_column = "group", formula = "~ group")))) %>% 
+  mutate(dds = map(DGEL, ~suppressMessages(DESeq(.)))) %>% 
+  mutate(Root_vs_Rhizosphere = map(dds, ~lfcShrink(., contrast = c("group", "Root", "Rhizosphere"), ))) %>% 
+  dplyr::select(Root_vs_Rhizosphere, comparison) %>% 
+  unnest()
+```
+```{r}
+dim(PV_DE$dfs[[1]])
+dim(PV_DE$meta[[1]])
+
+tidy(PV_DE$Root_vs_Rhizosphere[[2]]) 
 ```
 
