@@ -8,6 +8,7 @@ library(tidyverse)
 library(tidyMB)
 library(broom)
 library(DESeq2)
+library(biobroom)
 ```
 
 ## Run on home computer
@@ -85,10 +86,11 @@ PVpc_good <- tidy_pcoa(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>%
                     filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
                     mutate(Depth = as.character(Depth)) %>% 
                     anti_join(deadSamples, by = "SampleID") %>% 
+                    mutate(Rep = as.character(Rep)) %>% 
                     select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA")
 
 PVpc_good$axes %>% 
-  ggplot(aes(MDS1, MDS2, color = Site)) +
+  ggplot(aes(MDS1, MDS2, color = Site, label = Rep)) +
   geom_point(size = 5) +
   scale_color_manual(values = c("grey50", "gold", "steelblue")) +
   theme_bw()
@@ -104,12 +106,54 @@ PVpc_good$axes %>%
   theme_bw()
 ```
 
-There are a few things to mention from the above PCoAs. The one that stands out the most to me is the Pickle MoBio samples are crazy different than the Pickle Homemade DNA extraction samples. This goes for both the rhizosphere and root. The other thing to note is that the the differences between the rhizosphere and root samples appear to be  larger for the MoBio samples than the Homemade DNA extraction samples.
 
+There are a few things to mention from the above PCoAs. The one that stands out the most to me is the Pickle MoBio samples are substantially different than the Pickle Homemade DNA extraction samples. This goes for both the rhizosphere and root. I really do not have any idea what this is about. It doesn't make that much biological sense. The other thing to note is that the the differences between the rhizosphere and root samples appear to be  larger for the MoBio samples than the Homemade DNA extraction samples.
 
-The next I did was to run a linear model to find phyla that are differentially abundant between the root and rhizosphere compartments in the Homemade and MoBio extractions. 
 ```{r}
-p_data %>% 
+PVpc_HM <- tidy_pcoa(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
+                    filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
+                      filter(Prep == "Homemade") %>% 
+                    mutate(Depth = as.character(Depth)) %>% 
+                    anti_join(deadSamples, by = "SampleID") %>% 
+                    mutate(Rep = as.character(Rep)) %>% 
+                    select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA")
+
+PVpc_HM$axes %>% 
+  ggplot(aes(MDS1, MDS2, color = Site, label = Rep)) +
+  geom_point(size = 5) +
+  scale_color_manual(values = c("grey50", "gold", "steelblue")) +
+  theme_bw()
+PVpc_HM$axes %>% 
+  ggplot(aes(MDS1, MDS2, color = Compartment)) +
+  geom_point(size = 5) +
+  scale_color_manual(values = c("#4A6FE3", "#D33F6A")) +
+  theme_bw()
+
+```
+Here we can see that the soil types and compartments are separating nicely with just the homemade extraction samples. Separation is better in the rhizosphere samples, but this is fairly typical.
+
+```{r}
+hmc <- widen(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% filter(Prep == "Homemade" & Site != "x"), value = "logRA", return_df = T)
+hmc_m <- grab_metadata(p_data %>% filter(Prep == "Homemade" & Site != "x") %>% select(Compartment, SampleID, Prep, Site), return_df = T)
+
+adonis(hmc ~ Compartment * Site, data = hmc_m)
+hmc[1:5,1:5]
+
+long_adonis(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
+                    filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
+                    filter(Prep == "Homemade") %>% 
+                    mutate(Depth = as.character(Depth)) %>% 
+                    anti_join(deadSamples, by = "SampleID") %>% 
+                    select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA", formula = "Site + Compartment")
+```
+
+
+
+The next I did was to run a linear model to find phyla and families that are differentially abundant between the root and rhizosphere compartments in the Homemade and MoBio extractions. I reasoned that if the extraction methods are working similarly, then we should see similar taxa being enriched in each compartment for each treatment and site. 
+
+
+```{r}
+DA_phy_comp <- p_data %>% 
   anti_join(deadSamples, by = "SampleID") %>% 
   group_by(Phylum2) %>%
   filter(Site != "x") %>% 
@@ -121,37 +165,44 @@ p_data %>%
   unnest(map(models, ~tidy(.))) %>% 
   filter(term != "(Intercept)") %>% 
   mutate(p.adj = p.adjust(p.value, "BH")) %>% 
-  filter(p.adj <= 0.05) %>% 
+  filter(p.adj <= 0.05) 
+
+DA_phy_comp %>% 
   ggplot(aes(Phylum2, estimate)) +
-  geom_bar(stat = "identity") +
+  geom_bar(stat = "identity", width = 0.5) +
   facet_grid(Site ~ Prep, scales = "free_y") +
   coord_flip() +
-  theme_minimal()
+  theme_minimal() +
+  labs(x = "", y = "Fold enrichment (to the left: Enriched in Rhizosphere; to the right: Enriched in Root")
 ```
+This graph shows that similar phyla are enriched in the compartments between the extraction methods. A few things to note: 1) There are no differentially abundant phyla in the BFL MoBio section because there was only one good sample that came from BFL for the MoBio extractions. Also, you can see that the effect sizes are larger in MoBio compared to the Homemade extractions. This is again indicative that one can detect larger differences between compartments using the MoBio extraction. Nonetheless, I think this is promising. There are no phyla that show enrichment in opposite directions between extraction techniques.
+
 
 ```{r}
-PV_DE <- p_data %>%
-  select(-Kingdom, -Phylum, -Phylum2, -Class, -Order, -Family, -Genus, -Species) %>% 
+DA_fam_comp <- p_data %>% 
   anti_join(deadSamples, by = "SampleID") %>% 
-  filter(Site != "BFL") %>% 
-  filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
-  group_by(variable) %>% 
-  filter(sum(value > 0) / n() >= 0.1) %>% 
-  mutate(group = factor(paste(Compartment))) %>% 
-  group_by(comparison = paste(Site, Prep, sep = "_")) %>% 
+  group_by(Family) %>%
+  filter(Site != "x") %>% 
+  group_by(SampleID, Family, Compartment, Prep, Site) %>% 
+  summarise(total = sum(RA * 1000)) %>% 
+  group_by(Prep, Site, Family) %>%
   nest() %>% 
-  #mutate(dfs = map(data, ~widen(., samples = "SampleID", value = "value"))) %>% 
-  #mutate(meta = map(data, ~grab_metadata(., samples = "SampleID")))
-  mutate(DGEL = map(data, ~suppressMessages(tidyDGEL(., method = "DESeq2", value = "value", group_column = "group", formula = "~ group")))) %>% 
-  mutate(dds = map(DGEL, ~suppressMessages(DESeq(.)))) %>% 
-  mutate(Root_vs_Rhizosphere = map(dds, ~lfcShrink(., contrast = c("group", "Root", "Rhizosphere"), ))) %>% 
-  dplyr::select(Root_vs_Rhizosphere, comparison) %>% 
-  unnest()
-```
-```{r}
-dim(PV_DE$dfs[[1]])
-dim(PV_DE$meta[[1]])
+  mutate(models = map(data, ~lm(log2(total + 1) ~ Compartment, .))) %>% 
+  unnest(map(models, ~tidy(.))) %>% 
+  filter(term != "(Intercept)") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH")) %>% 
+  filter(p.adj <= 0.05) 
 
-tidy(PV_DE$Root_vs_Rhizosphere[[2]]) 
+DA_fam_comp %>% 
+  ggplot(aes(Family, estimate)) +
+  geom_bar(stat = "identity", size = 0.5) +
+  facet_grid(Site ~ Prep, scales = "free_y") +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "", y = "Fold enrichment (to the left: Enriched in Rhizosphere; to the right: Enriched in Root")
 ```
+
+There is a similar story for bacterial families.
+
+
 
