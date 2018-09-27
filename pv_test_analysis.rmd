@@ -8,6 +8,7 @@ library(tidyverse)
 library(tidyMB)
 library(broom)
 library(biobroom)
+library(DESeq2)
 ```
 
 ## Run on home computer
@@ -137,6 +138,26 @@ PVpc_HM$axes %>%
 ```
 Here we can see that the soil types and compartments are separating nicely with just the homemade extraction samples. Separation is better in the rhizosphere samples than the roots, but this is fairly typical.
 
+## Permanova stats for MoBio
+```{r}
+long_adonis(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
+                    filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
+                    filter(Prep == "MoBio") %>% 
+                    mutate(Depth = as.character(Depth)) %>% 
+                    anti_join(deadSamples, by = "SampleID") %>% 
+                    select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA", formula = "Site * Compartment")
+```
+
+## Permanova stats for Homemade
+```{r}
+long_adonis(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
+                    filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
+                    filter(Prep == "Homemade") %>% 
+                    mutate(Depth = as.character(Depth)) %>% 
+                    anti_join(deadSamples, by = "SampleID") %>% 
+                    select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA", formula = "Site * Compartment")
+```
+
 
 ## Differentially Abundant Phyla and Families between compartments.
 The next I did was to run a linear model to find phyla and families that are differentially abundant between the root and rhizosphere compartments in the Homemade and MoBio extractions. I reasoned that if the extraction methods are working similarly, then we should see similar taxa being enriched in each compartment for each treatment and site. 
@@ -195,4 +216,77 @@ DA_fam_comp %>%
 There is a similar story for bacterial families.
 
 
+## Differentially abundant OTUs
+```{r}
+DEseq_pv <- p_data %>% 
+  filter(Site != "BFL") %>% 
+  filter(Compartment == "Root" | Compartment == "Rhizosphere") %>% 
+  dplyr::select(Compartment, Site, value, variable, Prep, SampleID) %>% 
+  group_by(variable) %>% 
+  filter(sum(value > 0) / n() > 0.1) %>% 
+  mutate(group = paste(Prep, Compartment, Site, sep= ".")) %>% 
+  group_by(group_var = "DESeq2") %>% 
+  nest() %>% 
+  mutate(DGEL = map(data, ~tidyDGEL(., value = "value", group_column = "group", method = "DESeq2", formula = "~ group"))) %>% 
+  mutate(dds = map(DGEL, ~DESeq(.))) %>% 
+  mutate(mb_pick = map(dds, ~lfcShrink(., contrast = c("group", "MoBio.Rhizosphere.Pickle", "MoBio.Root.Pickle"))),
+         hm_pick = map(dds, ~lfcShrink(., contrast = c("group", "Homemade.Rhizosphere.Pickle", "Homemade.Root.Pickle"))),
+         mb_temp = map(dds, ~lfcShrink(., contrast = c("group", "MoBio.Rhizosphere.Temple", "MoBio.Root.Temple"))),
+         hm_temp= map(dds, ~lfcShrink(., contrast = c("group", "Homemade.Rhizosphere.Temple", "Homemade.Root.Temple")))) %>% 
+  dplyr::select(mb_pick, hm_pick, mb_temp, hm_temp, group_var) %>% 
+  gather(key = comparison, value = results, -group_var)
+```
+
+```{r}
+DEseq_pv %>% 
+  unnest(map(results, ~tidy(.))) %>% 
+  mutate(sig = ifelse(p.adjusted <= 0.05, "sig", "ns")) %>% 
+  mutate(sig = ifelse(is.na(sig), "ns", sig)) %>% 
+  ggplot(aes(log10(baseMean), estimate, color = sig, alpha = sig)) +
+  geom_point() +
+  scale_color_manual(values = c("gray", "red")) +
+  scale_alpha_manual(values = c(0.1, 1)) +
+  facet_grid(.~comparison) +
+  theme_minimal()
+
+```
+
+```{r}
+DEseq_pv %>% 
+  unnest(map(results, ~tidy(.))) %>% 
+  filter(p.adjusted <= 0.05) %>% 
+  mutate(direction = ifelse(estimate > 0, "Rhizosphere", "Root")) %>% 
+  separate(comparison, into = c("Prep", "Site"), sep = "_") %>% 
+  dplyr::count(direction, Prep, Site)
+
+DEseq_pv %>% 
+  unnest(map(results, ~tidy(.))) %>% 
+  filter(p.adjusted <= 0.05) %>% 
+  mutate(direction = ifelse(estimate > 0, "Rhizosphere", "Root")) %>%
+  separate(comparison, into = c("Prep", "Site"), sep = "_") %>% 
+  dplyr::count(direction, Site, gene) %>% 
+  dplyr::count(direction, Site, n) %>% 
+  filter(n == 2)
+```
+
+```{r}
+DEseq_pv %>% 
+  unnest(map(results, ~tidy(.))) %>% 
+  filter(p.adjusted <= 0.05) %>% 
+  mutate(direction = ifelse(estimate > 0, "Rhizosphere", "Root")) %>%
+  separate(comparison, into = c("Prep", "Site"), sep = "_") %>% 
+  inner_join(tax, by = c("gene" = "variable")) %>% 
+  ggplot(aes(direction, fill = Phylum2)) +
+  geom_bar() +
+  facet_grid(Site ~ Prep)
+```
+
+
+```{r}
+p_data %>% 
+  filter(variable == "2551965") %>% 
+  ggplot(aes(Site, log2(RA * 1000 + 1), color = Compartment)) +
+  geom_boxplot() +
+  facet_grid(.~Prep)
+```
 
