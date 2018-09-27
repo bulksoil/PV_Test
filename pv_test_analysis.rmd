@@ -7,7 +7,6 @@ output: html_notebook
 library(tidyverse)
 library(tidyMB)
 library(broom)
-library(DESeq2)
 library(biobroom)
 ```
 
@@ -25,11 +24,11 @@ meta <- read_tsv("~/SMB/dna_test/PV_Test/pv_test.map")
 tax <- read_rds("~/Reference/gg_otus_tax.rds")
 ```
 
-
+## Gather data into a tidy object
 ```{r}
 p_data <- counts %>% 
   gather(PrimerCombo, value, -OTUID) %>% 
-  rename(variable = "OTUID") %>% 
+  dplyr::rename(variable = "OTUID") %>% 
   mutate(variable = as.character(variable)) %>% 
   inner_join(meta, by = "PrimerCombo") %>% 
   inner_join(tax, by = "variable") %>% 
@@ -40,7 +39,7 @@ p_data <- counts %>%
   mutate(RA = value / Depth, prevalence = sum(value > 0) / n())
 ```
 
-
+## Do an initial PCoA on all of the data together
 ```{r}
 PVpc <- tidy_pcoa(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
                     filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
@@ -73,7 +72,7 @@ p_data %>%
   scale_fill_brewer(palette = "Spectral")
 ```
 
-Four of the off-looking samples are in the Temple Homemade Extractions and also in the BFL MoBio samples. The off samples in the Temple rhizosphere and root are paired (i.e. the rhizosphere and endosphere orignated from the same sample). The same goes for the BFL Mobio off-samples. This leads me to believe that these roots were probably dead when I collected them. This was my first time collecting switchgrass roots and I found it particularly difficult to find live roots and was having trouble telling the difference.
+Four of the off-looking samples are in the Temple Homemade Extractions and also in the BFL MoBio samples. The off samples in the Temple rhizosphere and root are paired (i.e. the rhizosphere and endosphere orignated from the same sample). The same goes for the BFL Mobio off-samples. This leads me to believe that these roots were probably dead when I collected them. I had a particularly difficult time to finding live roots at Temple and BFL.
 
 With this in mind, I'm going to go ahead and remove these samples from the analysis.
 
@@ -107,12 +106,16 @@ PVpc_good$axes %>%
 ```
 
 
-There are a few things to mention from the above PCoAs. The one that stands out the most to me is the Pickle MoBio samples are substantially different than the Pickle Homemade DNA extraction samples. This goes for both the rhizosphere and root. I really do not have any idea what this is about. It doesn't make that much biological sense. The other thing to note is that the the differences between the rhizosphere and root samples appear to be  larger for the MoBio samples than the Homemade DNA extraction samples.
+There are a few things to mention from the above PCoAs. The one that stands out the most to me is the Pickle MoBio samples are substantially different than the Pickle Homemade DNA extraction samples. This goes for both the rhizosphere and root. I really do not have any idea what this is about. It doesn't make that much biological sense. The other thing to note is that the the differences between the rhizosphere and root samples appear to be larger for the MoBio samples than the Homemade DNA extraction samples. I think this goes back to the lysis procedure. The way I interpret this is we are getting similar microbes in the compartment types between the extraction methods, but perhaps because we aren't fully lysing the microbes, we are losing some of the sensitivity to the differences. This is just my gut feeling.
+
+## Homemade sample
 
 ```{r}
 PVpc_HM <- tidy_pcoa(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
                     filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
                       filter(Prep == "Homemade") %>% 
+                      group_by(variable) %>% 
+                      filter(sum(value > 0) / n() > 0.1) %>% 
                     mutate(Depth = as.character(Depth)) %>% 
                     anti_join(deadSamples, by = "SampleID") %>% 
                     mutate(Rep = as.character(Rep)) %>% 
@@ -122,33 +125,20 @@ PVpc_HM$axes %>%
   ggplot(aes(MDS1, MDS2, color = Site, label = Rep)) +
   geom_point(size = 5) +
   scale_color_manual(values = c("grey50", "gold", "steelblue")) +
-  theme_bw()
+  theme_bw() +
+  labs(x = round(PVpc_HM$eigen_vals[1], 4) * 100, y = round(PVpc_HM$eigen_vals[2], 4) * 100)
 PVpc_HM$axes %>% 
   ggplot(aes(MDS1, MDS2, color = Compartment)) +
   geom_point(size = 5) +
   scale_color_manual(values = c("#4A6FE3", "#D33F6A")) +
-  theme_bw()
+  theme_bw() +
+  labs(x = round(PVpc_HM$eigen_vals[1], 4) * 100, y = round(PVpc_HM$eigen_vals[2], 4) * 100)
 
 ```
-Here we can see that the soil types and compartments are separating nicely with just the homemade extraction samples. Separation is better in the rhizosphere samples, but this is fairly typical.
-
-```{r}
-hmc <- widen(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% filter(Prep == "Homemade" & Site != "x"), value = "logRA", return_df = T)
-hmc_m <- grab_metadata(p_data %>% filter(Prep == "Homemade" & Site != "x") %>% select(Compartment, SampleID, Prep, Site), return_df = T)
-
-adonis(hmc ~ Compartment * Site, data = hmc_m)
-hmc[1:5,1:5]
-
-long_adonis(p_data %>% mutate(logRA = log2(RA * 1000 + 1)) %>% 
-                    filter(Compartment != "Iso" & Compartment != "Zymo") %>% 
-                    filter(Prep == "Homemade") %>% 
-                    mutate(Depth = as.character(Depth)) %>% 
-                    anti_join(deadSamples, by = "SampleID") %>% 
-                    select(-Kingdom, -Class, -Order, -Phylum, -Family, -Genus, -Species, -Phylum2), value = "logRA", formula = "Site + Compartment")
-```
+Here we can see that the soil types and compartments are separating nicely with just the homemade extraction samples. Separation is better in the rhizosphere samples than the roots, but this is fairly typical.
 
 
-
+## Differentially Abundant Phyla and Families between compartments.
 The next I did was to run a linear model to find phyla and families that are differentially abundant between the root and rhizosphere compartments in the Homemade and MoBio extractions. I reasoned that if the extraction methods are working similarly, then we should see similar taxa being enriched in each compartment for each treatment and site. 
 
 
