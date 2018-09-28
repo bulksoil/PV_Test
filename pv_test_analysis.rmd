@@ -220,6 +220,7 @@ There is a similar story for bacterial families.
 ```{r}
 DEseq_pv <- p_data %>% 
   filter(Site != "BFL") %>% 
+  anti_join(deadSamples, by = "SampleID") %>% 
   filter(Compartment == "Root" | Compartment == "Rhizosphere") %>% 
   dplyr::select(Compartment, Site, value, variable, Prep, SampleID) %>% 
   group_by(variable) %>% 
@@ -235,6 +236,23 @@ DEseq_pv <- p_data %>%
          hm_temp= map(dds, ~lfcShrink(., contrast = c("group", "Homemade.Rhizosphere.Temple", "Homemade.Root.Temple")))) %>% 
   dplyr::select(mb_pick, hm_pick, mb_temp, hm_temp, group_var) %>% 
   gather(key = comparison, value = results, -group_var)
+
+DEseq_pv2 <- p_data %>% 
+  filter(Site != "BFL") %>% 
+  anti_join(deadSamples, by = "SampleID") %>% 
+  filter(Compartment == "Root" | Compartment == "Rhizosphere") %>% 
+  dplyr::select(Compartment, Site, value, variable, Prep, SampleID) %>% 
+  group_by(variable) %>% 
+  filter(sum(value > 0) / n() > 0.1) %>% 
+  mutate(group = paste(Compartment, Site, sep= ".")) %>% 
+  group_by(Prep) %>% 
+  nest() %>% 
+  mutate(DGEL = map(data, ~tidyDGEL(., value = "value", group_column = "group", method = "DESeq2", formula = "~ group"))) %>% 
+  mutate(dds = map(DGEL, ~DESeq(.))) %>% 
+  mutate(Pickle = map(dds, ~lfcShrink(., contrast = c("group", "Rhizosphere.Pickle", "Root.Pickle"))),
+         Temple = map(dds, ~lfcShrink(., contrast = c("group", "Rhizosphere.Temple", "Root.Temple")))) %>% 
+  dplyr::select(Pickle, Temple, Prep) %>% 
+  gather(key = comparison, value = results, -Prep)
 ```
 
 ```{r}
@@ -242,13 +260,25 @@ DEseq_pv %>%
   unnest(map(results, ~tidy(.))) %>% 
   mutate(sig = ifelse(p.adjusted <= 0.05, "sig", "ns")) %>% 
   mutate(sig = ifelse(is.na(sig), "ns", sig)) %>% 
-  ggplot(aes(log10(baseMean), estimate, color = sig, alpha = sig)) +
+  ggplot(aes(baseMean, estimate, color = sig, alpha = sig)) +
   geom_point() +
   scale_color_manual(values = c("gray", "red")) +
   scale_alpha_manual(values = c(0.1, 1)) +
   facet_grid(.~comparison) +
+  scale_x_log10() +
   theme_minimal()
 
+DEseq_pv2 %>% 
+  unnest(map(results, ~tidy(.))) %>% 
+  mutate(sig = ifelse(p.adjusted <= 0.05, "sig", "ns")) %>% 
+  mutate(sig = ifelse(is.na(sig), "ns", sig)) %>% 
+  ggplot(aes(baseMean, estimate, color = sig, alpha = sig)) +
+  geom_point() +
+  scale_color_manual(values = c("gray", "red")) +
+  scale_alpha_manual(values = c(0.1, 1)) +
+  facet_grid(.~Prep + comparison) +
+  scale_x_log10() +
+  theme_minimal()
 ```
 
 ```{r}
@@ -270,6 +300,23 @@ DEseq_pv %>%
 ```
 
 ```{r}
+DEseq_pv2 %>% 
+  unnest(map(results, ~tidy(.))) %>% 
+  filter(p.adjusted <= 0.05) %>% 
+  mutate(direction = ifelse(estimate > 0, "Rhizosphere", "Root")) %>% 
+  dplyr::count(direction, Prep, comparison)
+
+DEseq_pv2 %>% 
+  unnest(map(results, ~tidy(.))) %>% 
+  filter(p.adjusted <= 0.05) %>% 
+  mutate(direction = ifelse(estimate > 0, "Rhizosphere", "Root")) %>%
+  dplyr::count(direction, comparison, gene) %>% 
+  dplyr::count(direction, comparison, n) %>% 
+  filter(n == 2)
+```
+
+
+```{r}
 DEseq_pv %>% 
   unnest(map(results, ~tidy(.))) %>% 
   filter(p.adjusted <= 0.05) %>% 
@@ -284,9 +331,11 @@ DEseq_pv %>%
 
 ```{r}
 p_data %>% 
-  filter(variable == "2551965") %>% 
-  ggplot(aes(Site, log2(RA * 1000 + 1), color = Compartment)) +
+  filter(Site != "x") %>% 
+  filter(variable == "1105652") %>% 
+  ggplot(aes(Site, log2(RA * 1000 + 1), fill = Compartment)) +
   geom_boxplot() +
-  facet_grid(.~Prep)
+  facet_grid(.~Prep) +
+  scale_fill_brewer(palette = "Set2")
 ```
 
